@@ -79,16 +79,17 @@ impl SourceConfig {
     pub(crate) async fn get_source(
         &self,
         trigger_shutdown_rx: watch::Receiver<bool>,
+        hot_reload_fds: Option<&std::collections::HashMap<u32, std::os::unix::io::RawFd>>,
     ) -> Result<Source, Vec<String>> {
         match self {
             #[cfg(feature = "cassandra")]
-            SourceConfig::Cassandra(c) => c.get_source(trigger_shutdown_rx).await,
+            SourceConfig::Cassandra(c) => c.get_source(trigger_shutdown_rx, hot_reload_fds).await,
             #[cfg(feature = "valkey")]
-            SourceConfig::Valkey(r) => r.get_source(trigger_shutdown_rx).await,
+            SourceConfig::Valkey(r) => r.get_source(trigger_shutdown_rx, hot_reload_fds).await,
             #[cfg(feature = "kafka")]
-            SourceConfig::Kafka(r) => r.get_source(trigger_shutdown_rx).await,
+            SourceConfig::Kafka(r) => r.get_source(trigger_shutdown_rx, hot_reload_fds).await,
             #[cfg(feature = "opensearch")]
-            SourceConfig::OpenSearch(r) => r.get_source(trigger_shutdown_rx).await,
+            SourceConfig::OpenSearch(r) => r.get_source(trigger_shutdown_rx, hot_reload_fds).await,
         }
     }
 

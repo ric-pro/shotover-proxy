@@ -151,6 +151,113 @@ impl<C: CodecBuilder + 'static> TcpCodecListener<C> {
         })
     }
 
+    /// Create a new TcpCodecListener from an existing file descriptor
+    ///
+    /// This constructor is used during hot reload to create a new listener
+    /// that takes over an existing listening socket from another shotover instance.
+    ///
+    /// # Arguments
+    ///
+    /// * `chain_config` - Transform chain configuration
+    /// * `source_name` - Name of the source for logging and metrics
+    /// * `listen_addr` - Expected listen address (used for validation)
+    /// * `hard_connection_limit` - Whether to enforce hard connection limits
+    /// * `codec` - Codec builder for the protocol
+    /// * `limit_connections` - Semaphore for connection limiting
+    /// * `trigger_shutdown_rx` - Shutdown signal receiver
+    /// * `tls` - Optional TLS acceptor
+    /// * `timeout` - Connection timeout
+    /// * `transport` - Transport type (TCP/WebSocket)
+    /// * `hot_reload_rx` - Hot reload request receiver
+    /// * `raw_fd` - Raw file descriptor from the old shotover instance
+    ///
+    /// # Returns
+    ///
+    /// Returns a new TcpCodecListener using the existing file descriptor,
+    /// or an error if the FD cannot be converted to a TcpListener.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn from_existing_fd(
+        chain_config: &TransformChainConfig,
+        source_name: String,
+        listen_addr: String,
+        hard_connection_limit: bool,
+        codec: C,
+        limit_connections: Arc<Semaphore>,
+        trigger_shutdown_rx: watch::Receiver<bool>,
+        tls: Option<TlsAcceptor>,
+        timeout: Option<Duration>,
+        transport: Transport,
+        hot_reload_rx: tokio::sync::mpsc::UnboundedReceiver<HotReloadListenerRequest>,
+        raw_fd: std::os::unix::io::RawFd,
+    ) -> Result<Self, Vec<String>> {
+        use tracing::debug;
+
+        let available_connections_gauge =
+            gauge!("shotover_available_connections_count", "source" => source_name.clone());
+        let connections_opened = counter!("connections_opened", "source" => source_name.clone());
+        available_connections_gauge.set(limit_connections.available_permits() as f64);
+
+        let chain_usage_config = TransformContextConfig {
+            chain_name: source_name.clone(),
+            up_chain_protocol: codec.protocol(),
+        };
+        let chain_builder = chain_config
+            .get_builder(chain_usage_config)
+            .await
+            .map_err(|x| vec![format!("{x:?}")])?;
+
+        let mut errors = chain_builder
+            .validate()
+            .iter()
+            .map(|x| format!("  {x}"))
+            .collect::<Vec<String>>();
+
+        // Create listener from the existing file descriptor
+        let listener = match crate::hot_reload::fd_utils::recreate_tcp_listener_from_fd(
+            raw_fd,
+            Some(&listen_addr),
+        ) {
+            Ok(listener) => {
+                debug!(
+                    "Successfully created TcpListener from FD {} for source {}",
+                    raw_fd, source_name
+                );
+                Some(listener)
+            }
+            Err(error) => {
+                errors.push(format!(
+                    "Failed to recreate TcpListener from file descriptor {}: {:?}",
+                    raw_fd, error
+                ));
+                None
+            }
+        };
+
+        if !errors.is_empty() {
+            errors.insert(0, format!("{source_name} source (hot reload):"));
+            return Err(errors);
+        }
+
+        Ok(TcpCodecListener {
+            chain_builder,
+            source_name,
+            listener,
+            listen_addr,
+            hard_connection_limit,
+            codec,
+            limit_connections,
+            trigger_shutdown_rx,
+            tls,
+            connection_count: 0,
+            available_connections_gauge,
+            connections_opened,
+            timeout,
+            connection_handles: vec![],
+            transport,
+            hot_reload_rx,
+        })
+    }
+
     /// Run the server
     ///
     /// Listen for inbound connections. For each inbound connection, spawn a

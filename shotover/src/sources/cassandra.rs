@@ -28,25 +28,76 @@ impl CassandraConfig {
     pub async fn get_source(
         &self,
         mut trigger_shutdown_rx: watch::Receiver<bool>,
+        hot_reload_fds: Option<&std::collections::HashMap<u32, std::os::unix::io::RawFd>>,
     ) -> Result<Source, Vec<String>> {
         info!("Starting Cassandra source on [{}]", self.listen_addr);
 
         let (hot_reload_tx, hot_reload_rx) = tokio::sync::mpsc::unbounded_channel();
 
-        let mut listener = TcpCodecListener::new(
-            &self.chain,
-            self.name.clone(),
-            self.listen_addr.clone(),
-            self.hard_connection_limit.unwrap_or(false),
-            CassandraCodecBuilder::new(Direction::Source, self.name.clone()),
-            Arc::new(Semaphore::new(self.connection_limit.unwrap_or(512))),
-            trigger_shutdown_rx.clone(),
-            self.tls.as_ref().map(TlsAcceptor::new).transpose()?,
-            self.timeout.map(Duration::from_secs),
-            self.transport.unwrap_or(Transport::Tcp),
-            hot_reload_rx,
-        )
-        .await?;
+        // Check if we have a file descriptor for hot reload
+        let port = self
+            .listen_addr
+            .rsplit_once(':')
+            .and_then(|(_, p)| p.parse::<u32>().ok());
+
+        let mut listener = if let (Some(fds), Some(port)) = (hot_reload_fds, port) {
+            if let Some(&raw_fd) = fds.get(&port) {
+                info!(
+                    "Creating Cassandra source from existing file descriptor {} for port {}",
+                    raw_fd, port
+                );
+                TcpCodecListener::from_existing_fd(
+                    &self.chain,
+                    self.name.clone(),
+                    self.listen_addr.clone(),
+                    self.hard_connection_limit.unwrap_or(false),
+                    CassandraCodecBuilder::new(Direction::Source, self.name.clone()),
+                    Arc::new(Semaphore::new(self.connection_limit.unwrap_or(512))),
+                    trigger_shutdown_rx.clone(),
+                    self.tls.as_ref().map(TlsAcceptor::new).transpose()?,
+                    self.timeout.map(Duration::from_secs),
+                    self.transport.unwrap_or(Transport::Tcp),
+                    hot_reload_rx,
+                    raw_fd,
+                )
+                .await?
+            } else {
+                info!(
+                    "No file descriptor found for port {}, creating new listener",
+                    port
+                );
+                TcpCodecListener::new(
+                    &self.chain,
+                    self.name.clone(),
+                    self.listen_addr.clone(),
+                    self.hard_connection_limit.unwrap_or(false),
+                    CassandraCodecBuilder::new(Direction::Source, self.name.clone()),
+                    Arc::new(Semaphore::new(self.connection_limit.unwrap_or(512))),
+                    trigger_shutdown_rx.clone(),
+                    self.tls.as_ref().map(TlsAcceptor::new).transpose()?,
+                    self.timeout.map(Duration::from_secs),
+                    self.transport.unwrap_or(Transport::Tcp),
+                    hot_reload_rx,
+                )
+                .await?
+            }
+        } else {
+            info!("Creating new Cassandra listener (no hot reload)");
+            TcpCodecListener::new(
+                &self.chain,
+                self.name.clone(),
+                self.listen_addr.clone(),
+                self.hard_connection_limit.unwrap_or(false),
+                CassandraCodecBuilder::new(Direction::Source, self.name.clone()),
+                Arc::new(Semaphore::new(self.connection_limit.unwrap_or(512))),
+                trigger_shutdown_rx.clone(),
+                self.tls.as_ref().map(TlsAcceptor::new).transpose()?,
+                self.timeout.map(Duration::from_secs),
+                self.transport.unwrap_or(Transport::Tcp),
+                hot_reload_rx,
+            )
+            .await?
+        };
 
         let join_handle = tokio::spawn(async move {
             // Check we didn't receive a shutdown signal before the receiver was created

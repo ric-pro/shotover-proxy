@@ -53,7 +53,7 @@ pub fn recreate_tcp_listener_from_fd(
                 // Basic validation - check if the address matches expectations
                 if !actual_addr
                     .to_string()
-                    .contains(&expected.split(':').last().unwrap_or(""))
+                    .contains(expected.split(':').next_back().unwrap_or(""))
                 {
                     warn!(
                         "Socket address mismatch. Expected: {}, Actual: {}",
@@ -131,7 +131,7 @@ mod tests {
         // Create a test listener to get a valid FD
         let original_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let local_addr = original_listener.local_addr().unwrap();
-        let raw_fd = original_listener.as_raw_fd();
+        let _raw_fd = original_listener.as_raw_fd();
 
         // Convert to std listener and extract FD
         let std_listener = original_listener.into_std().unwrap();

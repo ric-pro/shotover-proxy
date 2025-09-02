@@ -185,18 +185,30 @@ impl Shotover {
         hotreload_from_socket: Option<String>,
         trigger_shutdown_rx: watch::Receiver<bool>,
     ) -> Result<()> {
-        if let Some(socket_path) = hotreload_from_socket.clone() {
+        // Hot reload orchestration - get file descriptors if needed
+        let hot_reload_fds = if let Some(socket_path) = hotreload_from_socket.clone() {
             info!("Hot reload CLIENT mode - requesting socket handoff from existing shotover");
-            crate::hot_reload::client::perform_hot_reloading(socket_path)
+            let orchestrator =
+                crate::hot_reload::orchestrator::HotReloadOrchestrator::new(socket_path);
+            let result = orchestrator
+                .perform_hot_reload()
                 .await
-                .context("Hot reload client failed")?;
-        }
+                .context("Hot reload orchestration failed")?;
+
+            // Extract raw file descriptors for passing to topology
+            Some(crate::hot_reload::orchestrator::HotReloadOrchestrator::extract_raw_fds(&result))
+        } else {
+            None
+        };
 
         info!("Starting Shotover {}", crate_version!());
         info!(configuration = ?config);
         info!(topology = ?topology);
 
-        match topology.run_chains(trigger_shutdown_rx).await {
+        match topology
+            .run_chains(trigger_shutdown_rx, hot_reload_fds)
+            .await
+        {
             Ok(sources) => {
                 if hotreload_enabled {
                     info!("Starting shotover with hot reloading enabled");
