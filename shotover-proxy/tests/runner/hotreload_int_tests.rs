@@ -81,17 +81,14 @@ async fn test_actual_hotreload_socket_takeover() {
     assert_eq!(result, "original_value");
 
     // Start new shotover instance that should take over the socket
-    let shotover_new = shotover_process("tests/test-configs/hotreload/topology.yaml") // SAME topology
+    let shotover_new = shotover_process("tests/test-configs/hotreload/topology.yaml")
         .with_hotreload_from_socket(socket_path)
         .with_config("tests/test-configs/shotover-config/config_metrics_disabled.yaml")
         .start()
         .await;
 
-    // Give time for socket handoff
-    tokio::time::sleep(tokio::time::Duration::from_millis(1000)).await;
-
     // NEW CONNECTIONS should now go to the new instance
-    let client_new = Client::open("valkey://127.0.0.1:6380").unwrap(); // SAME PORT
+    let client_new = Client::open("valkey://127.0.0.1:6380").unwrap();
     let mut con_new = client_new.get_connection().unwrap();
 
     // Set data through new connection (should go to new instance)
