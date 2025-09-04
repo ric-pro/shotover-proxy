@@ -1,4 +1,4 @@
-// File descriptor utilities for hot reload functionality
+//! File descriptor utilities for hot reload functionality
 //!
 //! This module provides safe wrappers around unsafe file descriptor operations needed for hot reload socket handoff between shotover instances.
 //!
@@ -17,7 +17,6 @@ use tracing::{debug, warn};
 /// `raw_fd` - The raw file descriptor from the old shotover instance
 /// `expected_addr` - The expected address for validation
 /// Returns a Result containing the recreated TcpListener or an error if the conversion fails.
-
 pub fn recreate_tcp_listener_from_fd(
     raw_fd: RawFd,
     expected_addr: Option<&str>,
