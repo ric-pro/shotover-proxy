@@ -75,7 +75,9 @@ impl UnixSocketClient {
 }
 
 /// Request listening sockets from an existing Shotover instance during hot reload
-pub async fn perform_hot_reloading(socket_path: String) -> Result<()> {
+pub async fn perform_hot_reloading(
+    socket_path: String,
+) -> Result<std::collections::HashMap<u32, std::os::unix::io::RawFd>> {
     info!(
         "Hot reload CLIENT will request sockets from existing shotover at: {}",
         socket_path
@@ -92,10 +94,14 @@ pub async fn perform_hot_reloading(socket_path: String) -> Result<()> {
                 "Successfully received {} file descriptors from hot reload server",
                 port_to_fd.len()
             );
+
+            // Convert FileDescriptor wrapper to raw FDs and return them
+            let mut raw_fds = std::collections::HashMap::new();
             for (port, fd) in &port_to_fd {
                 info!("Received file descriptor {} for port {}", fd.0, port);
+                raw_fds.insert(*port, fd.0);
             }
-            Ok(())
+            Ok(raw_fds)
         }
         Ok(crate::hot_reload::protocol::Response::Error(msg)) => {
             Err(anyhow::anyhow!("Hot reload request failed: {}", msg))
